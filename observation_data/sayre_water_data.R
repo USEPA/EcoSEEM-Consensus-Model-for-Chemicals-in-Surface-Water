@@ -4,11 +4,45 @@ library('dplyr')
 library('ggplot2')
 library('readxl')
 library('NADA2') #! only for cboxplot
+library('forcats')
+library('viridis')
 
 ## A. From Method 1. Exclude chemicals with fewer than 50 uncensored (detected) concentration values
 
-DF_w_HUC <- read.csv("C:\\Users\\rrace\\Documents\\ECOSEEM\\DF_smaller_w_HUC_15may2021.csv")
+df_d <- read.csv("C:\\Users\\rrace\\Documents\\ECOSEEM\\smaller_df_21july2020.csv")
+
+df_d <- within(df_d, bloq[res_val == 0] <- 1)
+df_d$obs <- with(df_d, ifelse(bloq==1, loq_val, res_val))
+df_d$ln_obs <- log(df_d$obs)
+DF <- df_d[!is.na(df_d$ln_obs),]
+DF$cen <- with(DF, ifelse(bloq==1, TRUE, FALSE))
+
+#no_obs <- DF %>%
+#  group_by(chem_id, bloq) %>%
+#  summarise(mean = mean(obs), n = n()) %>% filter(n()==1) %>% filter(bloq == 1)
+#chem_ids_no_obs <- unique(no_obs$chem_id)
+#remove(no_obs)
+
+gt50_obs <- DF[which(DF$bloq == 0),] %>%
+  group_by(chem_id) %>%
+  filter(n() > 50)
+chem_ids <- unique(gt50_obs$chem_id)
+remove(gt50_obs)
+
+gt50_recs <- DF[which(!DF$chem_id %in% chem_ids),] %>%
+  group_by(chem_id) %>%
+  filter(n() > 50)
+bloq_chem_ids <- unique(gt50_recs$chem_id)
+#
+
+DF_smaller <- DF[which(DF$chem_id %in% chem_ids),]
+DF_smaller$year = substr(DF_smaller$ActivityStartDate, start = 1, stop = 4)
+DF_w_HUC <- merge(DF_smaller,station_unique,by='MonitoringLocationIdentifier', all.x=TRUE)
+# saved so I don't have to redo this slow step
+#DF_w_HUC <- read.csv("C:\\Users\\rrace\\Documents\\ECOSEEM\\DF_smaller_w_HUC_15may2021.csv")
+#! can remove other unnecessary fields
 DF_w_HUC <- subset(DF_w_HUC, select = -c(OrganizationFormalName,MonitoringLocationDescriptionText))
+DF_w_HUC$HUC02 <- substr(DF_w_HUC$HUCEightDigitCode, start = 1, stop = 2)
 chem_ids <- unique(DF_w_HUC$chem_id)
 
 plot_it <- DF_w_HUC %>% 
@@ -113,8 +147,9 @@ summary(glm(phase_diff ~ as.numeric(OCTANOL_WATER_PARTITION_LOGP_OPERA_PRED) +
 
 #! Plot conc differences between bulk and dissolved again
 
-# Because differences in concentration were statistically different, keep only 
+# Because differences in concentration were statistically different, separate 
 #   dissolved for better comparison with toxicity values
+#! can remove this step
 dslv_DF <- DF_w_HUC[which(DF_w_HUC$phase == 2),]
 bulk_DF <- DF_w_HUC[which(DF_w_HUC$phase == 3),]
 
@@ -125,16 +160,27 @@ gt50_obs <- dslv_DF[which(dslv_DF$bloq == 0),] %>%
   group_by(chem_id) %>%
   filter(n() > 50)
 new_chem_ids <- unique(gt50_obs$chem_id)
+remove(gt50_obs)
 
 # Find new subset of chemicals with gt50 obs
-gt50_obs <- bulk_DF[which(bulk_DF$bloq == 0),] %>%
+gt50_bulk_obs <- bulk_DF[which(bulk_DF$bloq == 0),] %>%
   group_by(chem_id) %>%
   filter(n() > 50)
 b_chem_ids <- unique(gt50_obs$chem_id)
-remove(gt50_obs)
 
 dslv_DF_smaller <- dslv_DF[which(dslv_DF$chem_id %in% new_chem_ids),]
+bulk_DF_smaller <- bulk_DF[which(bulk_DF$chem_id %in% b_chem_ids),]
 remove(dslv_DF)
+
+gt50_dslv_recs <- gt50_recs[which(gt50_recs$phase == 2),] %>%
+  group_by(chem_id) %>%
+  filter(n() > 50)
+bloq_dslv_chem_ids <- unique(gt50_dslv_recs$chem_id)
+
+gt50_bulk_recs <- gt50_recs[which(gt50_recs$phase == 3),] %>%
+  group_by(chem_id) %>%
+  filter(n() > 50)
+bloq_bulk_chem_ids <- unique(gt50_bulk_recs$chem_id)
 
 ## D. From Method 2. Compare concentration ranges of samples from each season pair
 
@@ -219,6 +265,8 @@ prop_chem_diff_season23 = round(n_significant_per_season23/(n_notsignificant_per
 df <- merge(x = wider_season_df, y = pcp, by = "chem_id", all.x=TRUE)
 df$EPAPCS[df$EPAPCS == 0] <- "Non-pesticide"
 df$EPAPCS[df$EPAPCS == 1] <- "Pesticide"
+
+# figure 3
 ggplot(df[!is.na(df$EPAPCS), ],
        aes(x = n_significant_per_chem, fill=EPAPCS)) + 
   geom_histogram(position="stack", alpha=0.5) +
@@ -226,12 +274,11 @@ ggplot(df[!is.na(df$EPAPCS), ],
   theme_bw() + 
   xlab("Season pair differences") + 
   ylab("Count of chemicals") +
-  scale_fill_manual(values = c("#42d64f", "#ef632c"))
+  scale_fill_manual(values = c("#34f900", "#644cff"))
 
 ## E. From Method 3. Calculate lognormal Maximum Likelihood Estimate parameters
 
 mle_envstats = list()
-mle_envstats_b = list()
 
 for (i in 1:length(new_chem_ids)) {
   chem = new_chem_ids[i]
@@ -292,23 +339,25 @@ for (i in 1:length(new_chem_ids)) {
 df <- as.data.frame(as.matrix(mle_envstats))
 wider_mle_df <- df %>% unnest_wider(V1)
 names(wider_mle_df)[1] <- "chem_id"
-names(wider_mle_df)[2] <- "sample_size"
-names(wider_mle_df)[3] <- "pct_cen"
-names(wider_mle_df)[4] <- "mle_5th"
-names(wider_mle_df)[5] <- "mle_25th"
-names(wider_mle_df)[6] <- "mle_50th"
-names(wider_mle_df)[7] <- "mle_50th_lcl"
-names(wider_mle_df)[8] <- "mle_50th_ucl"
-names(wider_mle_df)[9] <- "mle_75th"
-names(wider_mle_df)[10] <- "mle_95th"
-names(wider_mle_df)[11] <- "mle_99th"
-names(wider_mle_df)[12] <- "mle_sdlog"
-names(wider_mle_df)[13] <- "min_cen_level"
-names(wider_mle_df)[14] <- "max_cen_level"
+names(wider_mle_df)[2] <- "sample_size_dslv"
+names(wider_mle_df)[3] <- "pct_cen_dslv"
+names(wider_mle_df)[4] <- "mle_5th_dslv"
+names(wider_mle_df)[5] <- "mle_25th_dslv"
+names(wider_mle_df)[6] <- "mle_50th_dslv"
+names(wider_mle_df)[7] <- "mle_50th_lcl_dslv"
+names(wider_mle_df)[8] <- "mle_50th_ucl_dslv"
+names(wider_mle_df)[9] <- "mle_75th_dslv"
+names(wider_mle_df)[10] <- "mle_95th_dslv"
+names(wider_mle_df)[11] <- "mle_99th_dslv"
+names(wider_mle_df)[12] <- "mle_sdlog_dslv"
+names(wider_mle_df)[13] <- "min_cen_level_dslv"
+names(wider_mle_df)[14] <- "max_cen_level_dslv"
 
 write.csv(wider_mle_df,"nov1dsvl.csv")
 
 #! create bulk df smaller
+mle_envstats_b = list()
+
 for (i in 1:length(b_chem_ids)) {
   chem = b_chem_ids[i]
   this_res <- bulk_DF_smaller[which(bulk_DF_smaller$chem_id == chem),]  
@@ -324,8 +373,9 @@ for (i in 1:length(b_chem_ids)) {
                            env_mle_50$quantiles[[1]], 
                            env_mle_50$interval$limits[[1]], #lcl
                            env_mle_50$interval$limits[[2]], #ucl
-                           env_mle_50$parameters[[2]]                            
-    )
+                           env_mle_50$parameters[[2]], #sdlog     
+                           env_mle_50$censoring.levels[n_cen]
+                          )
     
   },
   error=function(cond) {})
@@ -336,14 +386,97 @@ for (i in 1:length(b_chem_ids)) {
 df <- as.data.frame(as.matrix(mle_envstats_b))
 wider_bulk_mle_df <- df %>% unnest_wider(V1)
 names(wider_bulk_mle_df)[1] <- "chem_id"
-names(wider_bulk_mle_df)[2] <- "bulk_sample_size"
-names(wider_bulk_mle_df)[3] <- "bulk_pct_cen"
-names(wider_bulk_mle_df)[4] <- "bulk_mle_50th"
-names(wider_bulk_mle_df)[5] <- "bulk_mle_50th_lcl"
-names(wider_bulk_mle_df)[6] <- "bulk_mle_50th_ucl"
-names(wider_bulk_mle_df)[7] <- "bulk_mle_sdlog"
+names(wider_bulk_mle_df)[2] <- "sample_size_bulk"
+names(wider_bulk_mle_df)[3] <- "pct_cen_bulk"
+names(wider_bulk_mle_df)[4] <- "mle_50th_bulk"
+names(wider_bulk_mle_df)[5] <- "mle_50th_lcl_bulk"
+names(wider_bulk_mle_df)[6] <- "mle_50th_ucl_bulk"
+names(wider_bulk_mle_df)[7] <- "mle_sdlog_bulk"
+names(wider_bulk_mle_df)[8] <- "max_cen_level_bulk"
 
 write.csv(wider_bulk_mle_df,"nov1bulk.csv")
+
+mle_envstats_bloq = list()
+
+for (i in 1:length(bloq_dslv_chem_ids)) {
+  chem = bloq_dslv_chem_ids[i]
+  this_res <- gt50_dslv_recs[which(gt50_dslv_recs$chem_id == chem),]  
+  tryCatch({
+    env_mle_50 <- eqlnormCensored(this_res$obs, as.logical(this_res$cen), method = "mle",
+                                  censoring.side = "left", 
+                                  p = 0.5,
+                                  ci = TRUE, ci.method = "exact.for.complete", ci.type = "two-sided",
+                                  conf.level = 0.95)
+    n_cen = length(env_mle_50$censoring.levels)
+    med_limit <- median(this_res[which(this_res$bloq == 1),]$obs)
+    mle_envstats_bloq[[i]] <- c(chem,
+                             env_mle_50$sample.size,
+                             env_mle_50$percent.censored,
+                             env_mle_50$quantiles[[1]], 
+                             env_mle_50$interval$limits[[1]], #lcl
+                             env_mle_50$interval$limits[[2]], #ucl
+                             env_mle_50$parameters[[2]], #sdlog
+                             env_mle_50$censoring.levels[n_cen],
+                             med_limit
+    )
+    
+  },
+  error=function(cond) {})
+  
+} 
+
+df <- as.data.frame(as.matrix(mle_envstats_bloq))
+wider_bloq_mle_df <- df %>% unnest_wider(V1)
+names(wider_bloq_mle_df)[1] <- "chem_id"
+names(wider_bloq_mle_df)[2] <- "bloq_sample_size_dslv"
+names(wider_bloq_mle_df)[3] <- "bloq_pct_cen_dslv"
+names(wider_bloq_mle_df)[4] <- "bloq_mle_50th_dslv"
+names(wider_bloq_mle_df)[5] <- "bloq_mle_50th_lcl_dslv"
+names(wider_bloq_mle_df)[6] <- "bloq_mle_50th_ucl_dslv"
+names(wider_bloq_mle_df)[7] <- "bloq_mle_sdlog_dslv"
+names(wider_bloq_mle_df)[8] <- "bloq_max_cen_level_dslv"
+names(wider_bloq_mle_df)[9] <- "bloq_med_cen_level_dslv"
+
+mle_envstats_bloq_b = list()
+
+for (i in 1:length(bloq_bulk_chem_ids)) {
+  chem = bloq_bulk_chem_ids[i]
+  this_res <- gt50_bulk_recs[which(gt50_bulk_recs$chem_id == chem),]  
+  tryCatch({
+    env_mle_50 <- eqlnormCensored(this_res$obs, as.logical(this_res$cen), method = "mle",
+                                  censoring.side = "left", 
+                                  p = 0.5,
+                                  ci = TRUE, ci.method = "exact.for.complete", ci.type = "two-sided",
+                                  conf.level = 0.95)
+    n_cen = length(env_mle_50$censoring.levels)
+    med_limit <- median(this_res[which(this_res$bloq == 1),]$obs)
+    mle_envstats_bloq_b[[i]] <- c(chem,
+                                env_mle_50$sample.size,
+                                env_mle_50$percent.censored,
+                                env_mle_50$quantiles[[1]], 
+                                env_mle_50$interval$limits[[1]], #lcl
+                                env_mle_50$interval$limits[[2]], #ucl
+                                env_mle_50$parameters[[2]], #sdlog
+                                env_mle_50$censoring.levels[n_cen],
+                                med_limit
+    )
+    
+  },
+  error=function(cond) {})
+  
+} 
+
+df <- as.data.frame(as.matrix(mle_envstats_bloq_b))
+wider_bloq_bulk_mle_df <- df %>% unnest_wider(V1)
+names(wider_bloq_bulk_mle_df)[1] <- "chem_id"
+names(wider_bloq_bulk_mle_df)[2] <- "bloq_sample_size_bulk"
+names(wider_bloq_bulk_mle_df)[3] <- "bloq_pct_cen_bulk"
+names(wider_bloq_bulk_mle_df)[4] <- "bloq_mle_50th_bulk"
+names(wider_bloq_bulk_mle_df)[5] <- "bloq_mle_50th_lcl_bulk"
+names(wider_bloq_bulk_mle_df)[6] <- "bloq_mle_50th_ucl_bulk"
+names(wider_bloq_bulk_mle_df)[7] <- "bloq_mle_sdlog_bulk"
+names(wider_bloq_bulk_mle_df)[8] <- "bloq_max_cen_level_bulk"
+names(wider_bloq_bulk_mle_df)[9] <- "bloq_med_cen_level_bulk"
 
 ## F. From Method 3. Calculate Kaplan-Meier empirical 95th percentile
 
@@ -395,13 +528,14 @@ df <- df[!is.na(df$km_95th), ]
 df <- df[order(df$pct_cen),] 
 df$idx <- seq.int(nrow(df))
 
+# figure 5
 ggplot(data=df) + 
   geom_segment(aes(x = idx, xend = idx, y = km_50th, yend = km_95th),
-               size=1, lty="11", color = "#E69F00"
+               size=1, lty="11", color = "#ff8000"
   ) +
   geom_segment(aes(x = idx, xend = idx, y = mle_50th, yend = mle_95th),
-               position = position_nudge(x = 0.4),  size=1, lty="31",color = "#56B4E9") +  #, 
-  geom_point(aes(x = idx, y = min_cen_level), shape = 6, color = 'grey30') +
+               position = position_nudge(x = 0.4),  size=1, lty="31",color = "#1ab3ff") +  #, 
+  #geom_point(aes(x = idx, y = min_cen_level), shape = 6, color = 'grey30') +
   geom_point(aes(x = idx, y = max_cen_level), shape = 2, color = 'grey30') +
   #"#0072B2"
   scale_y_log10() + 
@@ -415,9 +549,27 @@ ggplot(data=df) +
 #df$mu <- 10^df$`10LogSSDMedianConcentration(ug/L)-MuChronic NOEC`
 #df$sigma <- 10^df$`10LogSSDSlope(ug/L)-SigmaChronic NOEC`
 
+# replace slope when indicated
+#"Slope too low to be realistic, replace by 0.7"
+replace_slope_idx <- grepl('^Slope', df$`Remark on chronic SSD slope`)
+df$`10LogSSDSlope(ug/L)-SigmaChronic NOEC`[replace_slope_idx] <- 0.7 
+
 df$ssd_5th = df$`10LogSSDMedianConcentration(ug/L)-MuChronic NOEC` - 1.645*df$`10LogSSDSlope(ug/L)-SigmaChronic NOEC`
 df$ssd_1st = df$`10LogSSDMedianConcentration(ug/L)-MuChronic NOEC` - 2.33*df$`10LogSSDSlope(ug/L)-SigmaChronic NOEC`
-df$color = ifelse(log10(df$km_95th)>df$ssd_5th, "red", ifelse(log10(df$km_99th)>df$ssd_1st,"yellow","green"))
+#df$color = ifelse(log10(df$km_50th)>df$ssd_5th, "red", ifelse(log10(df$km_99th)>df$ssd_1st,"yellow","green"))
+df$category = ifelse(log10(df$km_50th)>df$ssd_5th, "a",
+                  ifelse(log10(df$km_50th)>df$ssd_1st,"b",
+                         ifelse(log10(df$km_95th)>df$ssd_5th,"c",
+                                ifelse(log10(df$km_95th)>df$ssd_1st,"d",
+                                       ifelse(log10(df$km_99th)>df$ssd_5th,"e",
+                                              ifelse(log10(df$km_99th)>df$ssd_1st,"f","g"
+                                              )
+                                       )
+                                )
+                         )
+            )
+)
+
 
 df <- df[order(df$pct_cen),] 
 df$idx <- seq.int(nrow(df))
@@ -425,9 +577,9 @@ df$idx <- seq.int(nrow(df))
 
 final_chem_ids <- unique(df$chem_id)
 
-# ! replace slope when indicated
-#"Slope too low to be realistic, replace by 0.7"
 
+
+# old figure
 ggplot(data = df,
        aes(x=ssd_5th,
            y=log10(km_95th))) + 
@@ -439,23 +591,61 @@ ggplot(data = df,
   theme_bw()
 
 df$ranking <- df$ssd_1st - log10(df$km_99th)
-df <- df[order(df$ranking),] 
-df$idx <- seq.int(nrow(df))
+df <- df[order(df$category,df$ranking),] 
+#df$idx <- seq.int(nrow(df))
 
-library(forcats)
+#https://github.com/tidyverse/forcats/issues/16
+fct_reordern <- function(.f, ..., .desc=FALSE, ordered=NA) {
+  stopifnot(length(.desc) %in% c(1, ...length()))
+  stopifnot(all(.desc %in% c(TRUE, FALSE)))
+  f <- forcats:::check_factor(.f)
+  # The radix method is used to support a vector of .desc (other methods only
+  # support scalar values for .desc).
+  new_order <- base::order(..., method="radix", decreasing=.desc)
+  f_sorted <- f[new_order]
+  fct_inorder(f=f_sorted, ordered=ordered)
+}
+
+# figure 6
 ggplot(data=df) + 
-  geom_segment(aes(x = fct_reorder(DTXSID, ranking), xend = fct_reorder(DTXSID, ranking), y = log10(km_50th), yend = log10(km_99th),color = color),
+  geom_segment(aes(x = fct_reordern(DTXSID, category, ranking),
+                   xend = fct_reordern(DTXSID, category, ranking),
+                   y = log10(km_50th),
+                   yend = log10(km_99th),color = category),
                size=1, lty="11", alpha = 0.9
   ) +
-  geom_segment(aes(x = fct_reorder(DTXSID, ranking), xend = fct_reorder(DTXSID, ranking), y = `10LogSSDMedianConcentration(ug/L)-MuChronic NOEC`, yend = ssd_1st,color = color),
-               size=1, lty="31", alpha = 0.9) +  #, 
+  geom_segment(aes(x = fct_reordern(DTXSID, category, ranking),
+                   xend = fct_reordern(DTXSID, category, ranking),
+                   y = `10LogSSDMedianConcentration(ug/L)-MuChronic NOEC`,
+                   yend = ssd_1st,color = category),
+               position = position_nudge(x = 0.4),size=1, lty="31", alpha = 0.9) +  #, 
   theme_bw()+
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5,
                                    hjust=1, size=5),
-        legend.title = element_blank())+
+        legend.title = element_blank(),legend.position="none")+
   labs(x = "Chemicals from highest to lowest bioactivity exposure overlap",
-       y = "Concentrations (log \u03bcg/L)") +
-  scale_color_manual(values = c("#009E73", "#D55E00", "#F0E442"))
+       y = "Concentrations (log \u03bcg/L)") + 
+  scale_color_viridis(option='plasma',discrete=TRUE)#+
+#scale_color_manual(values = c("#009E73",'#e31a1d','#ff7f00'))
+
+ggplot(data=df[which(df$color %in% c('red','yellow')),]) + 
+  geom_segment(aes(x = fct_reorder(INPUT, ranking), xend = fct_reorder(INPUT, ranking), y = log10(km_50th), yend = log10(km_99th),color = color),
+               size=1, lty="11", alpha = 0.8
+  ) +
+  geom_segment(aes(x = fct_reorder(INPUT, ranking), xend = fct_reorder(INPUT, ranking), y = `10LogSSDMedianConcentration(ug/L)-MuChronic NOEC`, yend = ssd_1st,color = color),
+               position = position_nudge(x = 0.4), size=1, lty="31", alpha = 0.4) +  #,\
+  geom_point(aes(x = fct_reorder(INPUT, ranking), y=log10(km_99th)), shape=2) +
+  geom_point(aes(x = fct_reorder(INPUT, ranking), y=ssd_1st)) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5,
+                                   hjust=1, size=5),
+        legend.title = element_blank(),legend.position="none")+
+  labs(x = "Chemicals from highest to lowest bioactivity exposure overlap",
+       y = "Concentrations (log \u03bcg/L)") 
+  
+  
+  +
+  scale_color_manual(values = c("#009E73",'#e31a1d','#ff7f00'))
 
 
 # Two chemicals are prioritized on the basis of this lowest risk condition: acetic acid and bifenthrin.
@@ -478,6 +668,7 @@ ggplot(data = df) + #,aes(x=ssd_5th, y=log10(mle_95th)
 # One additional chemical is prioritized on the basis of this risk condition: 
 # chloroform. 
 
+# old figure
 ggplot(data = df,
        aes(x=ssd_5th,
            y=log10(mle_95th-mle_50th+mle_50th_ucl))) + 
@@ -515,9 +706,10 @@ plot_limits$tech_gt_mean <- ifelse(plot_limits$rpt_gt_tech == 0,
                                    ifelse(plot_limits$`1` > plot_limits$mean_conc, 1, 0),
                                    NA)
 
+# figure 2
 ggplot(data = plot_limits[which(plot_limits$chem_id %in% final_chem_ids),]) + 
-  geom_point(aes(x=mean_conc,y=`1`), color="#E69F00", alpha = 0.9, shape = 17) + #technical
-  geom_point(aes(x=mean_conc,y=`3`), color="#56B4E9", alpha = 0.9, shape = 15) + #reporting
+  geom_point(aes(x=mean_conc,y=`1`), color="#ff8000", alpha = 0.9, shape = 17) + #technical
+  geom_point(aes(x=mean_conc,y=`3`), color="#644cff", alpha = 0.9, shape = 15) + #reporting
   geom_segment(aes(x = mean_conc, xend = mean_conc, y = `1`, yend = `3`),
                color = 'azure4', alpha = 0.9) +
   geom_abline(slope=1, intercept = 0, linetype='dashed') + 
@@ -529,3 +721,11 @@ ggplot(data = plot_limits[which(plot_limits$chem_id %in% final_chem_ids),]) +
 
 sum(na.omit(plot_limits[which(plot_limits$chem_id %in% final_chem_ids),])$rpt_gt_tech)
 length(na.omit(plot_limits[which(plot_limits$chem_id %in% final_chem_ids),])$rpt_gt_tech)
+
+#! export for paper 2
+first_res <- merge(x = wider_mle_df, y = wider_bulk_mle_df, by = "chem_id", all = TRUE)
+second_res <- merge(x = first_res, y = wider_bloq_bulk_mle_df, by = "chem_id", all = TRUE)
+second_res <- second_res[!is.na(second_res$chem_id),]
+third_res <- merge(x = second_res, y = wider_bloq_mle_df, by = "chem_id", all = TRUE)
+third_res <- third_res[!is.na(third_res$chem_id),]
+write.csv(third_res,"all_chem_res_2021dec05.csv")
