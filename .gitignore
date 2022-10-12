@@ -1,0 +1,8 @@
+###################
+# Don't track content of these folders
+###################
+
+###################
+# Or these R files
+###################
+observation_data/smaller_df_21july2020.csv
