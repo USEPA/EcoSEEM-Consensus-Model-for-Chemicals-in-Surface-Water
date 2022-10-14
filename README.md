@@ -5,9 +5,10 @@ U.S. EPA’s Center for Computational Toxicology and Exposure provides tools to 
 
 ### Supplemental Information
 
-* observation_data/load_water_data.py
-* observation_data/sayre_water_data.R
-* observation_data/smaller_df_21july2020.zip
+* Records from Water Quality Portal: observation_data/smaller_df_21july2020.zip (note, all concentrations in ug/L units)
+* Python processing script: observation_data/load_water_data.py
+* Additional processing in R: observation_data/sayre_water_data.R
+* Final results for all figures: observation_data/all_chem_results.csv (Note, primary results are in columns Conc.Median.ugpL, Conc.95th.ugpL, Censor.Median.ugpL, and Censor.Max.ugpL. All concentrations are in ug/L units.)
 
 ### Abstract
 
